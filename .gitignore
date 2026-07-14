@@ -1,0 +1,50 @@
+# Secrets
+.env
+.env.local
+frontend/.env.local
+backend/.env
+
+# Expo / Node
+node_modules/
+frontend/node_modules/
+.expo/
+frontend/.expo/
+dist/
+web-build/
+expo-env.d.ts
+*.tsbuildinfo
+
+# Python
+venv/
+.venv/
+.venv-streamlit/
+backend/.venv/
+__pycache__/
+/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Databases and runtime data
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+backend/data/*.db
+backend/backups/
+backend/data/backups/
+
+# Build / IDE / OS
+build/
+dist/
+.idea/
+.vscode/
+.claude/
+.agents/
+.codex/
+.DS_Store
+Thumbs.db
+*.log
