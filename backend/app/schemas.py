@@ -115,12 +115,21 @@ class ReceiptItemResponse(BaseModel):
     name: str
     quantity: float = Field(default=1, gt=0)
     price: float
+    unit_price: float | None = None
+    amount: float
 
 
 class ReceiptAnalysisResponse(BaseModel):
     store_name: str
+    merchant_name: str | None = None
+    receipt_date: str | None = None
+    currency: str | None = None
     items: list[ReceiptItemResponse]
+    subtotal: float | None = None
+    tax: float | None = None
     total: float
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
     analysis_mode: str
     warning: str | None = None
 
