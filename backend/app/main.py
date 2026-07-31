@@ -65,6 +65,13 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+ALLOWED_RECEIPT_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 
 
 def create_app(
@@ -365,15 +372,15 @@ def create_app(
             raise HTTPException(status_code=403, detail="이 하우스에 접근할 권한이 없습니다.")
 
         mime_type = (file.content_type or "").lower()
-        if not mime_type.startswith("image/"):
-            raise HTTPException(status_code=415, detail="이미지 파일만 업로드할 수 있습니다.")
+        if mime_type not in ALLOWED_RECEIPT_MIME_TYPES:
+            raise HTTPException(status_code=400, detail="JPEG, PNG, WEBP, HEIC 또는 HEIF 이미지만 업로드할 수 있습니다.")
 
         image_bytes = await file.read(MAX_RECEIPT_BYTES + 1)
         await file.close()
         if not image_bytes:
             raise HTTPException(status_code=400, detail="업로드한 이미지가 비어 있습니다.")
         if len(image_bytes) > MAX_RECEIPT_BYTES:
-            raise HTTPException(status_code=413, detail="이미지 크기는 10MB 이하여야 합니다.")
+            raise HTTPException(status_code=400, detail="이미지 크기는 10MB 이하여야 합니다.")
 
         try:
             result = await run_in_threadpool(
@@ -382,7 +389,7 @@ def create_app(
                 mime_type,
             )
         except ReceiptAnalysisError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
         return ReceiptAnalysisResponse(**result)
 
     def serialize_chore(row: dict[str, object]) -> ChoreResponse:

@@ -63,3 +63,19 @@ def get_receipt_mock_enabled() -> bool:
 
 def get_receipt_model() -> str:
     return os.getenv("ROOMSYNC_RECEIPT_MODEL", "gpt-4.1-mini").strip()
+
+
+def get_receipt_provider() -> str:
+    configured = os.getenv("ROOMSYNC_RECEIPT_PROVIDER")
+    if configured is not None:
+        return configured.strip().lower()
+    legacy_mode = get_receipt_mode()
+    return "mock" if legacy_mode == "mock" else "openai"
+
+
+def get_gemini_model() -> str:
+    return os.getenv("ROOMSYNC_GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
+
+
+def get_receipt_debug_enabled() -> bool:
+    return os.getenv("ROOMSYNC_RECEIPT_DEBUG", "false").strip().lower() == "true"
