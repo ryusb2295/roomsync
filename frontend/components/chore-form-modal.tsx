@@ -1,5 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -18,6 +18,7 @@ import { InlineError } from '@/components/inline-error';
 import { Radius, Spacing, Typography } from '@/constants/theme';
 import { useRoomTheme } from '@/hooks/use-room-theme';
 import type { HouseMember } from '@/types/api';
+import { formatKoreanDate } from '@/utils/date';
 
 type ChoreDraft = {
   title: string;
@@ -32,6 +33,7 @@ type Props = {
   initialAssigneeUserId?: number;
   loading: boolean;
   error?: string | null;
+  initialDraft?: ChoreDraft;
   onClose: () => void;
   onSubmit: (draft: ChoreDraft) => void;
 };
@@ -54,6 +56,7 @@ export function ChoreFormModal({
   initialAssigneeUserId,
   loading,
   error,
+  initialDraft,
   onClose,
   onSubmit,
 }: Props) {
@@ -63,30 +66,45 @@ export function ChoreFormModal({
   const [assigneeUserId, setAssigneeUserId] = useState<number | null>(null);
   const [scheduledDate, setScheduledDate] = useState(dateKey());
   const [dateTouched, setDateTouched] = useState(false);
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const safeMembers = useMemo(() => Array.isArray(members) ? members : [], [members]);
 
   useEffect(() => {
     if (!visible) return;
-    setTitle('');
-    setDescription('');
+    if (__DEV__) console.log('[cleaning] formState before initialize:', { members, initialDraft, initialAssigneeUserId });
+    setTitle(initialDraft?.title ?? '');
+    setDescription(initialDraft?.description ?? '');
     setAssigneeUserId(
-      initialAssigneeUserId && members.some((member) => member.user_id === initialAssigneeUserId)
-        ? initialAssigneeUserId
-        : members[0]?.user_id ?? null
+      initialDraft?.assigneeUserId && safeMembers.some((member) => member.user_id === initialDraft.assigneeUserId)
+        ? initialDraft.assigneeUserId
+        : initialAssigneeUserId && safeMembers.some((member) => member.user_id === initialAssigneeUserId)
+          ? initialAssigneeUserId
+        : safeMembers[0]?.user_id ?? null
     );
-    setScheduledDate(dateKey());
+    const nextDate = initialDraft?.scheduledDate && isValidDate(initialDraft.scheduledDate)
+      ? initialDraft.scheduledDate
+      : dateKey();
+    setScheduledDate(nextDate);
+    const [year, month] = nextDate.split('-').map(Number);
+    setCalendarMonth(new Date(year, month - 1, 1));
+    setCalendarVisible(false);
     setDateTouched(false);
-  }, [initialAssigneeUserId, members, visible]);
+  }, [initialAssigneeUserId, initialDraft, members, safeMembers, visible]);
 
   const validDate = isValidDate(scheduledDate);
   const canSubmit = title.trim().length > 0 && assigneeUserId !== null && validDate && !loading;
 
-  const moveDate = (days: number) => {
-    const base = isValidDate(scheduledDate)
-      ? new Date(`${scheduledDate}T00:00:00`)
-      : new Date();
-    base.setDate(base.getDate() + days);
-    setScheduledDate(dateKey(base));
+  const calendarDays = Array.from({ length: 42 }, (_, index) => {
+    const firstDayOffset = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1).getDay();
+    return new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), index - firstDayOffset + 1);
+  });
+
+  const selectDate = (date: Date) => {
+    setScheduledDate(dateKey(date));
+    setCalendarMonth(new Date(date.getFullYear(), date.getMonth(), 1));
     setDateTouched(true);
+    setCalendarVisible(false);
   };
 
   return (
@@ -96,7 +114,7 @@ export function ChoreFormModal({
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.header}>
               <View style={styles.headerCopy}>
-                <Text style={[Typography.screenTitle, { color: colors.textPrimary }]}>청소 일정 추가</Text>
+                <Text style={[Typography.screenTitle, { color: colors.textPrimary }]}>{initialDraft ? '청소 일정 수정' : '청소 일정 추가'}</Text>
                 <Text style={[styles.subtitle, { color: colors.textSecondary }]}>현재 하우스에 새 담당 일정을 등록합니다.</Text>
               </View>
               <Pressable accessibilityLabel="닫기" accessibilityRole="button" disabled={loading} onPress={onClose} style={styles.close}>
@@ -110,7 +128,7 @@ export function ChoreFormModal({
 
               <View style={styles.fieldGroup}>
                 <Text style={[styles.label, { color: colors.textPrimary }]}>담당자</Text>
-                {members.map((member) => {
+                {safeMembers.map((member) => {
                   const selected = member.user_id === assigneeUserId;
                   return (
                     <Pressable
@@ -131,30 +149,32 @@ export function ChoreFormModal({
                     </Pressable>
                   );
                 })}
-                {members.length === 0 ? <InlineError message="선택할 수 있는 하우스 멤버가 없습니다." /> : null}
+                {loading ? <Text style={[styles.memberRole, { color: colors.textSecondary }]}>하우스 멤버를 불러오는 중...</Text> : safeMembers.length === 0 ? <InlineError message="선택할 수 있는 하우스 멤버가 없습니다." /> : null}
               </View>
 
               <View style={styles.fieldGroup}>
-                <AppTextField
-                  error={dateTouched && !validDate ? 'YYYY-MM-DD 형식의 실제 날짜를 입력해주세요.' : null}
-                  keyboardType="numbers-and-punctuation"
-                  label="예정일"
-                  maxLength={10}
-                  onBlur={() => setDateTouched(true)}
-                  onChangeText={setScheduledDate}
-                  placeholder="YYYY-MM-DD"
-                  value={scheduledDate}
-                />
-                <View style={styles.dateActions}>
-                  <AppButton fullWidth={false} label="이전 날" onPress={() => moveDate(-1)} variant="tertiary" />
-                  <AppButton fullWidth={false} label="오늘" onPress={() => setScheduledDate(dateKey())} variant="tertiary" />
-                  <AppButton fullWidth={false} label="다음 날" onPress={() => moveDate(1)} variant="tertiary" />
-                </View>
+                <Text style={[styles.label, { color: colors.textPrimary }]}>예정일</Text>
+                <Pressable
+                  accessibilityLabel="청소 예정일 선택"
+                  accessibilityRole="button"
+                  onPress={() => setCalendarVisible((current) => !current)}
+                  style={({ pressed }) => [styles.dateField, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.pressed]}>
+                  <MaterialIcons color={colors.primary} name="calendar-month" size={23} />
+                  <View style={styles.memberCopy}><Text style={[styles.dateValue, { color: colors.textPrimary }]}>{validDate ? formatKoreanDate(scheduledDate, '날짜를 선택해주세요') : '날짜를 선택해주세요'}</Text></View>
+                  <MaterialIcons color={colors.textSecondary} name={calendarVisible ? 'expand-less' : 'expand-more'} size={24} />
+                </Pressable>
+                {dateTouched && !validDate ? <InlineError message="올바른 날짜를 선택해주세요." /> : null}
+                {calendarVisible ? <View style={[styles.calendar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <View style={styles.calendarHeader}><Pressable hitSlop={10} onPress={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} style={styles.calendarNav}><MaterialIcons color={colors.primary} name="chevron-left" size={26} /></Pressable><Text style={[styles.calendarTitle, { color: colors.textPrimary }]}>{calendarMonth.getFullYear()}년 {calendarMonth.getMonth() + 1}월</Text><Pressable hitSlop={10} onPress={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} style={styles.calendarNav}><MaterialIcons color={colors.primary} name="chevron-right" size={26} /></Pressable></View>
+                  <View style={styles.weekRow}>{['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <Text key={day} style={[styles.weekday, { color: index === 0 ? colors.danger : index === 6 ? colors.primary : colors.textSecondary }]}>{day}</Text>)}</View>
+                  <View style={styles.daysGrid}>{calendarDays.map((date) => { const key = dateKey(date); const selected = key === scheduledDate; const outside = date.getMonth() !== calendarMonth.getMonth(); const weekendColor = date.getDay() === 0 ? colors.danger : date.getDay() === 6 ? colors.primary : colors.textPrimary; return <Pressable accessibilityRole="button" accessibilityState={{ selected }} key={key} onPress={() => selectDate(date)} style={[styles.dayCell, selected && { backgroundColor: colors.primary }]}><Text style={[styles.dayText, { color: selected ? colors.onPrimary : outside ? colors.placeholder : weekendColor }]}>{date.getDate()}</Text></Pressable>; })}</View>
+                  <View style={styles.calendarActions}><AppButton fullWidth={false} label="취소" onPress={() => setCalendarVisible(false)} variant="tertiary" /><AppButton fullWidth={false} label="오늘" onPress={() => selectDate(new Date())} variant="secondary" /></View>
+                </View> : null}
               </View>
               {error ? <InlineError message={error} /> : null}
               <AppButton
                 disabled={!canSubmit}
-                label="일정 등록"
+                label={initialDraft ? '수정 저장' : '일정 등록'}
                 loading={loading}
                 onPress={() => assigneeUserId !== null && onSubmit({ title: title.trim(), description: description.trim(), assigneeUserId, scheduledDate })}
               />
@@ -173,5 +193,8 @@ const styles = StyleSheet.create({
   form: { gap: Spacing.item, marginTop: Spacing.section }, memoInput: { minHeight: 92, paddingTop: 14 }, fieldGroup: { gap: Spacing.compact }, label: { fontSize: 14, fontWeight: '600' },
   memberRow: { alignItems: 'center', borderRadius: Radius.input, borderWidth: 1, flexDirection: 'row', gap: Spacing.md, minHeight: 58, paddingHorizontal: Spacing.item },
   memberCopy: { flex: 1, gap: 2 }, memberName: { fontSize: 15, fontWeight: '700' }, memberRole: { fontSize: 12 }, pressed: { opacity: 0.75 },
-  dateActions: { flexDirection: 'row', justifyContent: 'space-between' },
+  dateField: { alignItems: 'center', borderRadius: Radius.input, borderWidth: 1, flexDirection: 'row', gap: Spacing.md, minHeight: 56, paddingHorizontal: Spacing.item },
+  dateValue: { fontSize: 15, fontWeight: '700' }, calendar: { borderRadius: Radius.card, borderWidth: 1, gap: Spacing.compact, padding: Spacing.md },
+  calendarHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, calendarNav: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 }, calendarTitle: { fontSize: 16, fontWeight: '800' },
+  weekRow: { flexDirection: 'row' }, weekday: { fontSize: 12, fontWeight: '700', textAlign: 'center', width: '14.2857%' }, daysGrid: { flexDirection: 'row', flexWrap: 'wrap' }, dayCell: { alignItems: 'center', borderRadius: Radius.pill, height: 40, justifyContent: 'center', width: '14.2857%' }, dayText: { fontSize: 14, fontWeight: '600' }, calendarActions: { flexDirection: 'row', gap: Spacing.compact, justifyContent: 'flex-end' },
 });

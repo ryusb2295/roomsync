@@ -256,7 +256,7 @@ export default function SettingsScreen() {
         <ListRow destructive icon="delete-outline" onPress={openHouseDeletion} subtitle="모든 하우스 데이터를 영구 삭제합니다" title="하우스 삭제" />
       </> : <ListRow destructive icon="exit-to-app" onPress={() => setAction('leave')} subtitle="하우스 데이터는 삭제되지 않습니다" title="하우스 나가기" />)}
 
-      {section('앱 설정', <><ListRow icon="language" subtitle="한국어" title="언어" />{divider}<ListRow icon="notifications-none" subtitle="현재 기기에만 적용됩니다" title="알림" trailing={<Switch accessibilityLabel="알림 사용" ios_backgroundColor={colors.disabled} onValueChange={setNotificationsEnabled} trackColor={{ false: colors.disabled, true: colors.primary }} value={notificationsEnabled} />} /></>)}
+      {section('앱 설정', <><ListRow icon="language" subtitle="한국어 · 향후 지원 예정" title="언어" />{divider}<ListRow icon="notifications-none" subtitle="현재 기기에만 적용됩니다" title="알림" trailing={<Switch accessibilityLabel="알림 사용" ios_backgroundColor={colors.disabled} onValueChange={setNotificationsEnabled} trackColor={{ false: colors.disabled, true: colors.primary }} value={notificationsEnabled} />} /></>)}
       {section('계정 관리', <><ListRow icon="person-outline" subtitle={user?.email} title={user?.display_name ?? '내 계정'} />{divider}<ListRow icon="logout" onPress={logout} title="로그아웃" />{divider}<ListRow destructive icon="person-remove" onPress={openAccountDeletion} subtitle="공유 기록은 탈퇴한 사용자로 보존됩니다" title="계정 삭제" /></>)}
 
       <ActionSheetModal confirmLabel="하우스 나가기" danger description="멤버십만 제거되며 하우스의 일정과 내역은 유지됩니다." disabled={working} error={actionError} loading={working} onClose={closeAction} onConfirm={leaveHouse} title="하우스에서 나갈까요?" visible={action === 'leave'}>

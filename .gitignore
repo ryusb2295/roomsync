@@ -48,3 +48,6 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local review and generated temporary files
+tmp/

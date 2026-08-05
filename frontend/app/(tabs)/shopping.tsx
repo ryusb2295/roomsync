@@ -7,6 +7,8 @@ import { AppButton } from '@/components/app-button';
 import { AppTextField } from '@/components/app-text-field';
 import { CheckRow } from '@/components/check-row';
 import { EmptyState } from '@/components/empty-state';
+import { FeedbackBanner } from '@/components/feedback-banner';
+import { HouseContextBanner } from '@/components/house-context-banner';
 import { InlineError } from '@/components/inline-error';
 import { ScreenContainer } from '@/components/screen-container';
 import { Radius, Spacing, Typography } from '@/constants/theme';
@@ -30,6 +32,7 @@ export default function ShoppingScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const loadItems = useCallback(async () => {
     if (!token || !currentHouse) {
@@ -60,6 +63,7 @@ export default function ShoppingScreen() {
     const itemName = newItem.trim();
     if (!itemName || !token || !currentHouse || adding) return;
     setAdding(true);
+    setSuccess(null);
     setMutationError(null);
     try {
       await apiRequest<ShoppingItem>(`/houses/${currentHouse.id}/shopping-items`, {
@@ -67,6 +71,7 @@ export default function ShoppingScreen() {
       });
       setNewItem('');
       await loadItems();
+      setSuccess('장바구니에 항목을 추가했습니다.');
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : '품목을 추가하지 못했습니다.');
     } finally {
@@ -77,6 +82,7 @@ export default function ShoppingScreen() {
   const toggleItem = async (item: ShoppingItem) => {
     if (!token || !currentHouse || updatingId !== null) return;
     setUpdatingId(item.id);
+    setSuccess(null);
     setMutationError(null);
     try {
       await apiRequest<ShoppingItem>(
@@ -84,6 +90,7 @@ export default function ShoppingScreen() {
         { method: 'PATCH', token, body: { is_completed: !item.is_completed } }
       );
       await loadItems();
+      setSuccess(item.is_completed ? '구매 대기 상태로 되돌렸습니다.' : '구매 완료로 표시했습니다.');
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : '구매 상태를 변경하지 못했습니다.');
     } finally {
@@ -125,6 +132,7 @@ export default function ShoppingScreen() {
       }
       setDeleteTarget(null);
       await loadItems();
+      setSuccess(deleteTarget.kind === 'all' ? '완료 항목을 모두 삭제했습니다.' : '완료 항목을 삭제했습니다.');
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : '완료 품목을 삭제하지 못했습니다.');
     } finally {
@@ -134,24 +142,12 @@ export default function ShoppingScreen() {
 
   const renderItem = (item: ShoppingItem, allowDelete: boolean) => (
     <View key={item.id} style={styles.itemRow}>
-      <View style={styles.itemContent}>
-        <CheckRow
-          checked={item.is_completed}
-          detail={item.is_completed ? `${item.added_by} · 구매 완료` : `${item.added_by} · 구매 필요`}
-          disabled={updatingId !== null || deleting}
-          label={item.item_name}
-          onToggle={() => toggleItem(item)}
-        />
-      </View>
+      <CheckRow checked={item.is_completed} detail={item.is_completed ? `${item.added_by} · 구매 완료` : `${item.added_by} · 구매 필요`} disabled={updatingId !== null || deleting} label={item.item_name} onToggle={() => toggleItem(item)} />
       {allowDelete ? (
-        <AppButton
-          disabled={deleting || updatingId !== null}
-          fullWidth={false}
-          icon="delete-outline"
-          label="삭제"
-          onPress={() => openItemDelete(item)}
-          variant="danger"
-        />
+        <View style={styles.actionRow}>
+          <AppButton disabled={deleting || updatingId !== null} fullWidth={false} label="완료 취소" onPress={() => toggleItem(item)} size="compact" variant="tertiary" />
+          <AppButton disabled={deleting || updatingId !== null} fullWidth={false} icon="delete-outline" label="삭제" onPress={() => openItemDelete(item)} size="compact" variant="danger" />
+        </View>
       ) : null}
     </View>
   );
@@ -160,7 +156,9 @@ export default function ShoppingScreen() {
   const isBulkDelete = deleteTarget?.kind === 'all';
 
   return (
-    <ScreenContainer keyboardAware subtitle={`${currentHouse?.name ?? '현재 하우스'}에서 함께 필요한 물품을 관리하세요.`} title="장바구니">
+    <ScreenContainer keyboardAware onRefresh={() => void loadItems()} refreshing={loading} subtitle={`${currentHouse?.name ?? '현재 하우스'}에서 함께 필요한 물품을 관리하세요.`} title="장바구니">
+      <HouseContextBanner />
+      {success ? <FeedbackBanner message={success} /> : null}
       <View style={styles.section}>
         <Text style={[Typography.sectionTitle, { color: colors.textPrimary }]}>새 품목 추가</Text>
         <AppTextField
@@ -206,15 +204,15 @@ export default function ShoppingScreen() {
       </>}
 
       <ActionSheetModal
-        confirmLabel={isBulkDelete ? '완료 항목 모두 삭제' : '이 품목 삭제'}
+        confirmLabel={isBulkDelete ? '완료 항목 모두 삭제' : '삭제'}
         danger
-        description={isBulkDelete ? `완료된 품목 ${completedItems.length}개를 모두 삭제합니다. 구매가 필요한 품목은 유지됩니다.` : `“${deleteTarget?.kind === 'item' ? deleteTarget.item.item_name : ''}” 품목을 목록에서 영구 삭제합니다.`}
+        description={isBulkDelete ? `완료된 품목 ${completedItems.length}개를 모두 삭제합니다. 구매가 필요한 품목은 유지됩니다.` : '구매 완료된 품목을 삭제할까요?'}
         disabled={deleting}
         error={deleteError}
         loading={deleting}
         onClose={closeDelete}
         onConfirm={confirmDelete}
-        title={isBulkDelete ? `완료된 품목 ${completedItems.length}개를 모두 삭제할까요?` : '이 품목을 삭제할까요?'}
+        title={isBulkDelete ? `완료된 품목 ${completedItems.length}개를 모두 삭제할까요?` : '품목 삭제'}
         visible={deleteTarget !== null}>
         <Text style={[styles.confirmHint, { color: colors.textSecondary }]}>삭제한 품목은 앱을 다시 실행해도 복구되지 않습니다.</Text>
       </ActionSheetModal>
@@ -228,8 +226,8 @@ const styles = StyleSheet.create({
   headingCopy: { alignItems: 'baseline', flexDirection: 'row', gap: Spacing.compact },
   count: { fontSize: 12 },
   list: { borderRadius: Radius.card, borderWidth: 1, paddingHorizontal: Spacing.item },
-  itemRow: { alignItems: 'center', flexDirection: 'row', gap: Spacing.compact },
-  itemContent: { flex: 1 },
+  itemRow: { paddingVertical: Spacing.xs },
+  actionRow: { alignItems: 'center', flexDirection: 'row', gap: Spacing.compact, justifyContent: 'flex-end', paddingBottom: Spacing.compact },
   divider: { height: StyleSheet.hairlineWidth, marginLeft: 37 },
   loading: { fontSize: 14, paddingVertical: Spacing.section, textAlign: 'center' },
   feedback: { gap: Spacing.item },

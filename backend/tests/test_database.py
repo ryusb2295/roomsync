@@ -42,13 +42,15 @@ class DatabaseTest(unittest.TestCase):
                 "house_members",
                 "houses",
                 "schema_migrations",
+                "receipt_items",
+                "receipts",
                 "settlement_participants",
                 "settlements",
                 "shopping_items",
                 "users",
             },
         )
-        self.assertEqual(versions, [1, 2, 3, 4, 5, 6])
+        self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7])
 
     def test_session_stores_token_hash_instead_of_bearer_token(self) -> None:
         user = self.database.create_user(

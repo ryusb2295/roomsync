@@ -38,10 +38,12 @@ type AuthContextValue = {
   houseMembers: HouseMember[];
   membersLoading: boolean;
   membersError: string | null;
+  logoutNotice: string | null;
   saveAuth: (auth: AuthResponse) => Promise<void>;
   selectHouse: (house: House) => Promise<void>;
   clearHouse: () => Promise<void>;
   clearLocalSession: () => Promise<void>;
+  clearLogoutNotice: () => void;
   logout: () => Promise<void>;
   refreshHouseMembers: () => Promise<void>;
 };
@@ -56,6 +58,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [houseMembers, setHouseMembers] = useState<HouseMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
 
   useEffect(() => {
     async function restoreSession() {
@@ -95,6 +98,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setUser(auth.user);
     setCurrentHouse(null);
     setHouseMembers([]);
+    setLogoutNotice(null);
     await removeStorage(HOUSE_KEY);
   }, []);
 
@@ -119,9 +123,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setMembersError(null);
     await Promise.all([removeStorage(TOKEN_KEY), removeStorage(HOUSE_KEY)]);
     if (activeToken) {
-      await apiRequest<null>('/auth/logout', { method: 'POST', token: activeToken }).catch(() => null);
+      try {
+        await apiRequest<null>('/auth/logout', { method: 'POST', token: activeToken });
+        setLogoutNotice(null);
+      } catch {
+        setLogoutNotice('서버 연결에 실패했지만 로그아웃되었습니다.');
+      }
     }
   }, [token]);
+
+  const clearLogoutNotice = useCallback(() => setLogoutNotice(null), []);
 
   const clearLocalSession = useCallback(async () => {
     await Promise.all([removeStorage(TOKEN_KEY), removeStorage(HOUSE_KEY)]);
@@ -140,10 +151,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setMembersLoading(true);
     setMembersError(null);
     try {
-      const members = await apiRequest<HouseMember[]>(
+      const response = await apiRequest<HouseMember[] | { members?: HouseMember[] }>(
         `/houses/${currentHouse.id}/members`,
         { token }
       );
+      const members = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.members) ? response.members : [];
+      if (__DEV__) console.log('[cleaning] members:', { response, normalizedCount: members.length });
+      if (!Array.isArray(response) && !Array.isArray(response?.members) && __DEV__) console.warn('[cleaning] invalid members response:', response);
       setHouseMembers(members);
     } catch (error) {
       setHouseMembers([]);
@@ -166,22 +182,26 @@ export function AuthProvider({ children }: PropsWithChildren) {
       houseMembers,
       membersLoading,
       membersError,
+      logoutNotice,
       saveAuth,
       selectHouse,
       clearHouse,
       clearLocalSession,
+      clearLogoutNotice,
       logout,
       refreshHouseMembers,
     }),
     [
       clearHouse,
       clearLocalSession,
+      clearLogoutNotice,
       currentHouse,
       houseMembers,
       isLoading,
       logout,
       membersError,
       membersLoading,
+      logoutNotice,
       refreshHouseMembers,
       saveAuth,
       selectHouse,

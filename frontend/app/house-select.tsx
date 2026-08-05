@@ -81,6 +81,8 @@ export default function HouseSelectScreen() {
     <ScreenContainer
       headerAction={<AppButton fullWidth={false} label="로그아웃" onPress={logout} variant="tertiary" />}
       keyboardAware
+      onRefresh={() => void loadHouses()}
+      refreshing={loading}
       subtitle={`${user?.display_name ?? ''}님이 생활할 공간을 선택하세요.`}
       title="하우스 선택">
       <View style={styles.section}>

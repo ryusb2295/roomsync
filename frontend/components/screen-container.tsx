@@ -1,5 +1,5 @@
 import type { PropsWithChildren, ReactNode } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '@/components/screen-header';
@@ -11,9 +11,11 @@ type ScreenContainerProps = PropsWithChildren<{
   subtitle?: string;
   headerAction?: ReactNode;
   keyboardAware?: boolean;
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }>;
 
-export function ScreenContainer({ children, title, subtitle, headerAction, keyboardAware = false }: ScreenContainerProps) {
+export function ScreenContainer({ children, title, subtitle, headerAction, keyboardAware = false, refreshing = false, onRefresh }: ScreenContainerProps) {
   const colors = useRoomTheme();
   const content = (
     <ScrollView
@@ -21,6 +23,7 @@ export function ScreenContainer({ children, title, subtitle, headerAction, keybo
       contentContainerStyle={styles.content}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
+      refreshControl={onRefresh ? <RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor={colors.primary} /> : undefined}
       showsVerticalScrollIndicator={false}>
       <ScreenHeader action={headerAction} subtitle={subtitle} title={title} />
       <View style={styles.body}>{children}</View>

@@ -46,16 +46,52 @@ export type BlockingHouse = {
 };
 
 export type ReceiptItem = {
-  name: string;
-  quantity: number;
-  price: number;
+  receipt_item_id?: number | null;
+  name: string | null;
+  quantity: number | null;
+  price: number | null;
+  unit_price?: number | null;
+  line_total?: number | null;
+  amount?: number | null;
+  tax_marker?: string | null;
+  gst_status: 'taxable' | 'gst_free' | 'unknown';
+  model_reported_confidence?: number | null;
+  is_shared?: boolean;
+  participant_user_ids?: number[];
+  type?: 'item' | 'discount' | 'coupon' | 'refund' | 'fee' | 'tax' | 'unknown';
+  applies_to_item_ids?: number[] | null;
+  discount_group_id?: string | null;
 };
 
 export type ReceiptAnalysis = {
+  receipt_id?: number | null;
+  uploaded_by?: number | null;
   store_name: string;
+  merchant_name?: string | null;
+  receipt_date?: string | null;
+  currency?: string | null;
   items: ReceiptItem[];
-  total: number;
-  analysis_mode: 'openai' | 'mock';
+  items_total?: number | null;
+  calculated_items_total?: number | null;
+  subtotal?: number | null;
+  tax?: number | null;
+  gst?: number | null;
+  discount?: number | null;
+  fees?: number | null;
+  rounding?: number | null;
+  total: number | null;
+  amount_paid?: number | null;
+  gst_inclusion_type: 'included' | 'excluded_then_added' | 'not_displayed' | 'mixed' | 'unknown';
+  gst_displayed: boolean;
+  verified_total: number | null;
+  reconciliation_status: 'verified' | 'verified_gst_included' | 'verified_gst_added' | 'mismatch' | 'needs_review';
+  requires_review: boolean;
+  model_reported_confidence?: number | null;
+  validation_score: number;
+  validation_status: 'verified' | 'mostly_verified' | 'needs_review' | 'invalid';
+  validation_reasons: string[];
+  warnings?: string[];
+  analysis_mode: 'gemini' | 'openai' | 'mock' | 'edited';
   warning: string | null;
 };
 
@@ -95,10 +131,16 @@ export type ShoppingItemsBulkDeleteResult = {
 };
 
 export type SettlementParticipant = {
+  id?: number | null;
   user_id: number;
   name: string;
   amount: number;
-  payment_status: string;
+  display_name: string;
+  share_amount_cents: number;
+  role: 'payer' | 'participant';
+  payment_status: 'payer' | 'unpaid' | 'paid';
+  paid_at?: string | null;
+  confirmed_by?: number | null;
 };
 
 export type Settlement = {
@@ -106,11 +148,28 @@ export type Settlement = {
   house_id: number;
   title: string;
   total_amount: number;
+  total_amount_cents: number;
+  receipt_id: number | null;
+  payer_id: number | null;
+  payer_name: string | null;
+  uploaded_by: number | null;
+  uploaded_by_name: string | null;
+  receipt_date: string | null;
   created_by: { user_id: number; name: string } | null;
   created_at: string;
-  status: string;
+  completed_at?: string | null;
+  status: 'in_progress' | 'completed';
   is_completed: boolean;
   participants: SettlementParticipant[];
+};
+
+export type SettlementPaymentStatusResult = {
+  settlement_id: number;
+  participant_user_id: number;
+  payment_status: 'paid' | 'unpaid';
+  settlement_status: 'in_progress' | 'completed';
+  paid_at: string | null;
+  completed_at: string | null;
 };
 
 export type SettlementDeleteResult = {

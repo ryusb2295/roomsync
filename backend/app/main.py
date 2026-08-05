@@ -1,4 +1,7 @@
 from contextlib import asynccontextmanager
+from decimal import Decimal, ROUND_HALF_UP
+import logging
+import time
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 
@@ -25,6 +28,9 @@ from backend.app.database import (
     SettlementAlreadyDeletedError,
     SettlementDeleteForbiddenError,
     SettlementNotFoundError,
+    SettlementPaymentForbiddenError,
+    SettlementParticipantNotFoundError,
+    PayerPaymentStatusError,
 )
 from backend.app.schemas import (
     AccountDeleteRequest,
@@ -45,6 +51,7 @@ from backend.app.schemas import (
     HouseResponse,
     LoginRequest,
     ReceiptAnalysisResponse,
+    ReceiptReconciliationRequest,
     SignupRequest,
     ShoppingItemCompleteRequest,
     ShoppingItemCreateRequest,
@@ -55,16 +62,19 @@ from backend.app.schemas import (
     SettlementCreatorResponse,
     SettlementDeleteResponse,
     SettlementParticipantResponse,
+    SettlementPaymentStatusRequest,
+    SettlementPaymentStatusResponse,
     SettlementResponse,
     UserResponse,
 )
-from backend.app.receipt_analyzer import ReceiptAnalysisError, ReceiptAnalyzer
+from backend.app.receipt_analyzer import ReceiptAnalysisError, ReceiptAnalyzer, allocate_shared_item_cents, preprocess_receipt_image, reconcile_receipt_amounts
 from backend.app.security import create_access_token, hash_password, verify_password
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
-MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+MAX_RECEIPT_BYTES = 25 * 1024 * 1024
 ALLOWED_RECEIPT_MIME_TYPES = {
     "image/jpeg",
     "image/png",
@@ -368,6 +378,7 @@ def create_app(
         db: Annotated[Database, Depends(get_database)],
         request: Request,
     ) -> ReceiptAnalysisResponse:
+        total_started = time.monotonic()
         if not db.is_house_member(house_id, int(user["id"])):
             raise HTTPException(status_code=403, detail="이 하우스에 접근할 권한이 없습니다.")
 
@@ -377,19 +388,61 @@ def create_app(
 
         image_bytes = await file.read(MAX_RECEIPT_BYTES + 1)
         await file.close()
+        logger.info("[receipt] upload_received size=%s mime_type=%s", len(image_bytes), mime_type)
         if not image_bytes:
             raise HTTPException(status_code=400, detail="업로드한 이미지가 비어 있습니다.")
         if len(image_bytes) > MAX_RECEIPT_BYTES:
-            raise HTTPException(status_code=400, detail="이미지 크기는 10MB 이하여야 합니다.")
+            raise HTTPException(status_code=413, detail="이미지 크기가 너무 큽니다. 25MB 이하 이미지로 다시 시도해 주세요.")
 
         try:
+            if request.app.state.receipt_analyzer.provider == "gemini":
+                image_bytes, mime_type, metadata = await run_in_threadpool(
+                    preprocess_receipt_image, image_bytes, mime_type
+                )
+                logger.info("[receipt] image_decoded original=%sx%s elapsed=%.2fs", metadata["original_width"], metadata["original_height"], metadata["elapsed_seconds"])
+                logger.info("[receipt] image_preprocessed original_bytes=%s processed_bytes=%s resolution=%sx%s elapsed=%.2fs", metadata["original_bytes"], metadata["processed_bytes"], metadata["processed_width"], metadata["processed_height"], metadata["elapsed_seconds"])
             result = await run_in_threadpool(
                 request.app.state.receipt_analyzer.analyze,
                 image_bytes,
                 mime_type,
             )
         except ReceiptAnalysisError as error:
+            logger.info("[receipt] total_elapsed=%.2fs status=failed code=%s", time.monotonic() - total_started, error.status_code)
             raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        persisted = db.create_receipt_analysis(house_id, int(user["id"]), result)
+        result["receipt_id"] = persisted["receipt_id"]
+        result["uploaded_by"] = persisted["uploaded_by"]
+        for item, item_id in zip(result.get("items", []), persisted["item_ids"]):
+            item["receipt_item_id"] = item_id
+        logger.info("[receipt] total_elapsed=%.2fs status=completed", time.monotonic() - total_started)
+        return ReceiptAnalysisResponse(**result)
+
+    @application.post(
+        "/houses/{house_id}/receipts/reconcile",
+        response_model=ReceiptAnalysisResponse,
+    )
+    def reconcile_receipt(
+        house_id: int,
+        payload: ReceiptReconciliationRequest,
+        user: Annotated[dict[str, object], Depends(get_current_user)],
+        db: Annotated[Database, Depends(get_database)],
+    ) -> ReceiptAnalysisResponse:
+        if not db.is_house_member(house_id, int(user["id"])):
+            raise HTTPException(status_code=403, detail="이 하우스에 접근할 권한이 없습니다.")
+        data = payload.model_dump()
+        data["analysis_mode"] = "edited"
+        data["warning"] = None
+        result = reconcile_receipt_amounts(data)
+        if payload.receipt_id is not None:
+            receipt = db.get_receipt(house_id, payload.receipt_id)
+            if receipt is None:
+                raise HTTPException(status_code=404, detail="영수증을 찾을 수 없습니다.")
+            if not db.update_receipt_analysis(house_id, payload.receipt_id, result):
+                raise HTTPException(status_code=404, detail="영수증을 찾을 수 없습니다.")
+            result["receipt_id"] = payload.receipt_id
+            result["uploaded_by"] = receipt.get("uploaded_by")
+            for output_item, input_item in zip(result.get("items", []), payload.items):
+                output_item["receipt_item_id"] = input_item.receipt_item_id
         return ReceiptAnalysisResponse(**result)
 
     def serialize_chore(row: dict[str, object]) -> ChoreResponse:
@@ -621,21 +674,52 @@ def create_app(
             )
         raw_participants = row.get("participants", [])
         participants = [
-            SettlementParticipantResponse(**participant)
+            SettlementParticipantResponse(
+                id=int(participant["id"]) if participant.get("id") is not None else None,
+                user_id=int(participant["user_id"]),
+                name=str(participant["name"]),
+                amount=float(participant["amount"]),
+                payment_status=str(participant["payment_status"]),
+                display_name=str(participant["name"]),
+                share_amount_cents=int(participant["share_amount_cents"]),
+                role="payer" if participant.get("role") == "payer" else "participant",
+                paid_at=str(participant["paid_at"]) if participant.get("paid_at") is not None else None,
+                confirmed_by=int(participant["confirmed_by"]) if participant.get("confirmed_by") is not None else None,
+            )
             for participant in raw_participants
             if isinstance(participant, dict)
         ]
-        status_text = str(row["status"])
+        if row.get("payer_id") is not None and all(
+            item.user_id != int(row["payer_id"]) for item in participants
+        ):
+            participants.append(SettlementParticipantResponse(
+                user_id=int(row["payer_id"]),
+                name=str(row.get("payer_name") or "결제자"),
+                display_name=str(row.get("payer_name") or "결제자"),
+                amount=0,
+                share_amount_cents=0,
+                role="payer",
+                payment_status="payer",
+            ))
+        raw_status = str(row["status"])
+        status_text = "completed" if raw_status in {"완료", "completed"} and row.get("payer_id") is not None else "in_progress"
         return SettlementResponse(
             settlement_id=int(row["id"]),
             house_id=int(row["house_id"]),
             title=str(row["title"]),
             total_amount=float(row["total_amount"]),
+            total_amount_cents=int(row.get("total_amount_cents") or Decimal(str(row["total_amount"])) * 100),
+            receipt_id=int(row["receipt_id"]) if row.get("receipt_id") is not None else None,
+            payer_id=int(row["payer_id"]) if row.get("payer_id") is not None else None,
+            payer_name=str(row["payer_name"]) if row.get("payer_name") is not None else None,
+            uploaded_by=int(row["uploaded_by"]) if row.get("uploaded_by") is not None else None,
+            uploaded_by_name=str(row["uploaded_by_name"]) if row.get("uploaded_by_name") is not None else None,
+            receipt_date=str(row["receipt_date"]) if row.get("receipt_date") is not None else None,
             created_by=creator,
             created_at=str(row["created_at"]),
+            completed_at=str(row["completed_at"]) if row.get("completed_at") is not None else None,
             status=status_text,
-            is_completed=status_text in {"완료", "completed"}
-            or (bool(participants) and all(item.payment_status == "완료" for item in participants)),
+            is_completed=status_text == "completed",
             participants=participants,
         )
 
@@ -667,21 +751,121 @@ def create_app(
             raise HTTPException(status_code=403, detail="이 하우스의 멤버만 정산을 생성할 수 있습니다.")
         if not payload.title:
             raise HTTPException(status_code=400, detail="정산 제목을 입력해주세요.")
+        if payload.receipt_reconciliation_status in {"mismatch", "needs_review"}:
+            raise HTTPException(
+                status_code=409,
+                detail="영수증 금액을 다시 확인하고 검증한 후 정산을 저장해주세요.",
+            )
+        participant_amount_cents: dict[int, int] | None = None
+        receipt_items = payload.items if payload.items is not None else payload.receipt_items
+        if receipt_items is not None:
+            if payload.payer_id is None:
+                raise HTTPException(status_code=400, detail="결제자를 선택해 주세요.")
+            if payload.receipt_reconciliation_status not in {
+                "verified", "verified_gst_included", "verified_gst_added"
+            } or payload.receipt_verified_total is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="검증된 영수증 금액이 있어야 정산을 저장할 수 있습니다.",
+                )
+            try:
+                allocation_cents, shared_total_cents = allocate_shared_item_cents(
+                    [item.model_dump() for item in receipt_items]
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            request_total_cents = int(
+                (Decimal(str(payload.total_amount)) * 100).to_integral_value(
+                    rounding=ROUND_HALF_UP
+                )
+            )
+            if shared_total_cents != request_total_cents:
+                raise HTTPException(
+                    status_code=409,
+                    detail="정산 총액이 공용 품목 합계와 일치하지 않습니다.",
+                )
+            if set(allocation_cents) != set(payload.participant_user_ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="전체 정산 대상자가 품목별 참여자와 일치하지 않습니다.",
+                )
+            participant_amount_cents = allocation_cents
+        request_total_cents = payload.total_amount_cents or int(
+            (Decimal(str(payload.total_amount)) * 100).to_integral_value(rounding=ROUND_HALF_UP)
+        )
+        receipt = db.get_receipt(house_id, payload.receipt_id) if payload.receipt_id else None
+        if payload.receipt_id is not None and receipt is None:
+            raise HTTPException(status_code=404, detail="영수증을 찾을 수 없습니다.")
+        uploaded_by = int(receipt["uploaded_by"]) if receipt and receipt.get("uploaded_by") is not None else payload.uploaded_by
+        if receipt and payload.uploaded_by is not None and uploaded_by != payload.uploaded_by:
+            raise HTTPException(status_code=400, detail="영수증 등록자 정보가 일치하지 않습니다.")
+        receipt_date = str(receipt["receipt_date"]) if receipt and receipt.get("receipt_date") else (payload.receipt_date.isoformat() if payload.receipt_date else None)
+        logger.info(
+            "Settlement create: house_id=%s total=%s reconciliation=%s shared_items=%s participants=%s",
+            house_id,
+            payload.total_amount,
+            payload.receipt_reconciliation_status,
+            len(receipt_items or []),
+            payload.participant_user_ids,
+        )
+        logger.info(
+            "Settlement identities: current_user_id=%s uploaded_by=%s payer_id=%s receipt_id=%s receipt_date=%s",
+            user["id"], uploaded_by, payload.payer_id, payload.receipt_id, receipt_date,
+        )
         try:
             settlement = db.create_settlement(
                 house_id=house_id,
                 title=payload.title,
                 total_amount=round(payload.total_amount, 2),
                 participant_user_ids=payload.participant_user_ids,
+                participant_amount_cents=participant_amount_cents,
+                payer_user_id=payload.payer_id,
                 created_by=int(user["id"]),
                 creator_name=str(user["display_name"]),
+                receipt_id=payload.receipt_id,
+                uploaded_by=uploaded_by,
+                receipt_date=receipt_date,
+                total_amount_cents=request_total_cents,
             )
         except InvalidSettlementParticipantsError as error:
             raise HTTPException(
                 status_code=400,
                 detail="정산 대상자는 모두 현재 하우스 멤버여야 합니다.",
             ) from error
+        logger.info(
+            "Settlement saved: settlement_id=%s payer_id=%s payer_name=%s uploaded_by=%s",
+            settlement["id"], settlement.get("payer_id"), settlement.get("payer_name"), settlement.get("uploaded_by"),
+        )
         return serialize_settlement(settlement)
+
+    @application.patch(
+        "/houses/{house_id}/settlements/{settlement_id}/participants/{participant_user_id}/payment-status",
+        response_model=SettlementPaymentStatusResponse,
+    )
+    def update_settlement_payment_status(
+        house_id: int,
+        settlement_id: int,
+        participant_user_id: int,
+        payload: SettlementPaymentStatusRequest,
+        user: Annotated[dict[str, object], Depends(get_current_user)],
+        db: Annotated[Database, Depends(get_database)],
+    ) -> SettlementPaymentStatusResponse:
+        if not db.is_house_member(house_id, int(user["id"])):
+            raise HTTPException(status_code=403, detail="이 하우스에 접근할 권한이 없습니다.")
+        try:
+            result = db.update_settlement_payment_status(
+                house_id, settlement_id, participant_user_id,
+                payload.payment_status, int(user["id"]),
+            )
+        except SettlementNotFoundError as error:
+            raise HTTPException(status_code=404, detail="정산 내역을 찾을 수 없습니다.") from error
+        except SettlementPaymentForbiddenError as error:
+            raise HTTPException(status_code=403, detail="결제자만 납부 상태를 변경할 수 있습니다.") from error
+        except SettlementParticipantNotFoundError as error:
+            raise HTTPException(status_code=404, detail="정산 참여자를 찾을 수 없습니다.") from error
+        except PayerPaymentStatusError as error:
+            raise HTTPException(status_code=409, detail="결제자의 상태는 변경할 수 없습니다.") from error
+        return SettlementPaymentStatusResponse(**result)
 
     @application.delete(
         "/houses/{house_id}/settlements/{settlement_id}",

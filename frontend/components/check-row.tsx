@@ -20,7 +20,7 @@ export function CheckRow({ checked, label, detail, disabled = false, onToggle }:
         <Text style={[styles.label, { color: checked ? colors.textSecondary : colors.textPrimary }, checked && styles.checked]}>{label}</Text>
         {detail ? <Text style={[styles.detail, { color: colors.textSecondary }]}>{detail}</Text> : null}
       </View>
-      <Text style={[styles.state, { color: checked ? colors.success : colors.textSecondary }]}>{checked ? '완료' : '미완료'}</Text>
+      <View style={[styles.stateBadge, { backgroundColor: checked ? colors.successSoft : colors.background }]}><Text style={[styles.state, { color: checked ? colors.success : colors.textSecondary }]}>{checked ? '완료' : '미완료'}</Text></View>
     </Pressable>
   );
 }
@@ -31,5 +31,6 @@ const styles = StyleSheet.create({
   checked: { textDecorationLine: 'line-through' },
   detail: { fontSize: 12, lineHeight: 17 },
   state: { fontSize: 12, fontWeight: '700' },
+  stateBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
   disabled: { opacity: 0.6 },
 });

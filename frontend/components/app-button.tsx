@@ -7,6 +7,7 @@ import { useRoomTheme } from '@/hooks/use-room-theme';
 
 type IconName = ComponentProps<typeof MaterialIcons>['name'];
 type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'danger';
+type ButtonSize = 'regular' | 'compact';
 
 type AppButtonProps = {
   label: string;
@@ -16,6 +17,7 @@ type AppButtonProps = {
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
+  size?: ButtonSize;
 };
 
 export function AppButton({
@@ -26,6 +28,7 @@ export function AppButton({
   loading = false,
   disabled = false,
   fullWidth = true,
+  size = 'regular',
 }: AppButtonProps) {
   const colors = useRoomTheme();
   const unavailable = disabled || loading;
@@ -39,6 +42,7 @@ export function AppButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
+        size === 'compact' && styles.compact,
         fullWidth && styles.fullWidth,
         variant === 'primary' && { backgroundColor: pressed ? colors.primaryPressed : colors.primary, borderColor: colors.primary },
         variant === 'secondary' && { backgroundColor: pressed ? colors.primarySoft : colors.surface, borderColor: colors.border },
@@ -51,7 +55,7 @@ export function AppButton({
       ) : (
         <>
           {icon ? <MaterialIcons color={unavailable ? colors.textSecondary : foreground} name={icon} size={20} /> : null}
-          <Text style={[styles.label, { color: unavailable ? colors.textSecondary : foreground }]}>{label}</Text>
+          <Text style={[styles.label, size === 'compact' && styles.compactLabel, { color: unavailable ? colors.textSecondary : foreground }]}>{label}</Text>
         </>
       )}
     </Pressable>
@@ -72,4 +76,6 @@ const styles = StyleSheet.create({
   },
   fullWidth: { alignSelf: 'stretch' },
   label: { fontSize: 16, fontWeight: '700' },
+  compact: { minHeight: 44, paddingHorizontal: Spacing.md },
+  compactLabel: { fontSize: 14 },
 });

@@ -4,6 +4,7 @@ import re
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Iterator
 
 from backend.app.security import hash_access_token
@@ -150,6 +151,18 @@ class SettlementDeleteForbiddenError(Exception):
 
 
 class InvalidSettlementParticipantsError(Exception):
+    pass
+
+
+class SettlementPaymentForbiddenError(Exception):
+    pass
+
+
+class SettlementParticipantNotFoundError(Exception):
+    pass
+
+
+class PayerPaymentStatusError(Exception):
     pass
 
 
@@ -447,6 +460,95 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (6, self._now()),
+            )
+
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    house_id INTEGER NOT NULL REFERENCES houses(id),
+                    uploaded_by INTEGER REFERENCES users(id),
+                    merchant_name TEXT,
+                    receipt_date TEXT,
+                    verified_total_cents INTEGER,
+                    reconciliation_status TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            receipt_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(receipts)")
+            }
+            for column, definition in {
+                "uploaded_by": "INTEGER REFERENCES users(id)",
+                "merchant_name": "TEXT",
+                "receipt_date": "TEXT",
+                "verified_total_cents": "INTEGER",
+                "reconciliation_status": "TEXT",
+                "created_at": "TEXT",
+            }.items():
+                if column not in receipt_columns:
+                    connection.execute(f"ALTER TABLE receipts ADD COLUMN {column} {definition}")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS receipt_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_id INTEGER NOT NULL REFERENCES receipts(id),
+                    name TEXT,
+                    line_total_cents INTEGER,
+                    item_order INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            receipt_item_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(receipt_items)")
+            }
+            for column, definition in {
+                "name": "TEXT", "line_total_cents": "INTEGER", "item_order": "INTEGER NOT NULL DEFAULT 0",
+                "line_type": "TEXT NOT NULL DEFAULT 'item'", "discount_group_id": "TEXT", "applies_to_item_ids": "TEXT",
+            }.items():
+                if column not in receipt_item_columns:
+                    connection.execute(f"ALTER TABLE receipt_items ADD COLUMN {column} {definition}")
+
+            settlement_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(settlements)")
+            }
+            for column, definition in {
+                "receipt_id": "INTEGER REFERENCES receipts(id)",
+                "payer_id": "INTEGER REFERENCES users(id)",
+                "uploaded_by": "INTEGER REFERENCES users(id)",
+                "receipt_date": "TEXT",
+                "total_amount_cents": "INTEGER",
+                "completed_at": "TEXT",
+            }.items():
+                if column not in settlement_columns:
+                    connection.execute(f"ALTER TABLE settlements ADD COLUMN {column} {definition}")
+            participant_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(settlement_participants)")
+            }
+            for column, definition in {
+                "share_amount_cents": "INTEGER",
+                "role": "TEXT NOT NULL DEFAULT 'participant'",
+                "paid_at": "TEXT",
+                "confirmed_by": "INTEGER REFERENCES users(id)",
+            }.items():
+                if column not in participant_columns:
+                    connection.execute(f"ALTER TABLE settlement_participants ADD COLUMN {column} {definition}")
+            connection.execute(
+                """UPDATE settlement_participants
+                   SET share_amount_cents = CAST(ROUND(amount * 100) AS INTEGER)
+                   WHERE share_amount_cents IS NULL"""
+            )
+            connection.execute("UPDATE settlement_participants SET payment_status = 'paid' WHERE payment_status IN ('완료', 'completed')")
+            connection.execute("UPDATE settlement_participants SET payment_status = 'unpaid' WHERE payment_status IN ('미납', 'pending')")
+            connection.execute("UPDATE settlement_participants SET payment_status = 'payer', role = 'payer' WHERE user_id = (SELECT payer_id FROM settlements WHERE settlements.id = settlement_participants.settlement_id) AND (SELECT payer_id FROM settlements WHERE settlements.id = settlement_participants.settlement_id) IS NOT NULL")
+            connection.execute("UPDATE settlement_participants SET payment_status = 'unpaid', role = 'participant' WHERE payment_status NOT IN ('payer', 'paid', 'unpaid')")
+            connection.execute("UPDATE settlements SET status = 'in_progress', completed_at = NULL WHERE payer_id IS NOT NULL AND EXISTS (SELECT 1 FROM settlement_participants participant WHERE participant.settlement_id = settlements.id AND participant.user_id != settlements.payer_id AND participant.payment_status != 'paid')")
+            connection.execute("UPDATE settlements SET status = 'completed', completed_at = COALESCE(completed_at, created_at) WHERE payer_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM settlement_participants participant WHERE participant.settlement_id = settlements.id AND participant.user_id != settlements.payer_id AND participant.payment_status != 'paid')")
+            # Deliberately do not infer payer_id for existing rows.
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (7, self._now()),
             )
 
     def create_user(self, email: str, password_hash: str, display_name: str) -> dict[str, Any]:
@@ -1163,6 +1265,86 @@ class Database:
             )
         return cursor.rowcount
 
+    @staticmethod
+    def _amount_to_cents(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int((Decimal(str(value)) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+        except Exception:
+            return None
+
+    def create_receipt_analysis(
+        self, house_id: int, uploaded_by: int, analysis: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self.session() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO receipts
+                    (house_id, uploaded_by, merchant_name, receipt_date,
+                     verified_total_cents, reconciliation_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    house_id, uploaded_by,
+                    analysis.get("merchant_name") or analysis.get("store_name"),
+                    analysis.get("receipt_date"),
+                    self._amount_to_cents(analysis.get("verified_total")),
+                    analysis.get("reconciliation_status"), self._now(),
+                ),
+            )
+            receipt_id = int(cursor.lastrowid)
+            item_ids: list[int] = []
+            for index, item in enumerate(analysis.get("items") or []):
+                item_cursor = connection.execute(
+                    """INSERT INTO receipt_items
+                       (receipt_id, name, line_total_cents, item_order, line_type, discount_group_id, applies_to_item_ids)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        receipt_id, item.get("name"),
+                        self._amount_to_cents(item.get("line_total") or item.get("amount") or item.get("price")),
+                        index, item.get("type") or "item", item.get("discount_group_id"),
+                        ",".join(str(value) for value in (item.get("applies_to_item_ids") or [])) or None,
+                    ),
+                )
+                item_ids.append(int(item_cursor.lastrowid))
+        return {"receipt_id": receipt_id, "uploaded_by": uploaded_by, "item_ids": item_ids}
+
+    def update_receipt_analysis(
+        self, house_id: int, receipt_id: int, analysis: dict[str, Any]
+    ) -> bool:
+        with self.session() as connection:
+            cursor = connection.execute(
+                """UPDATE receipts SET merchant_name = ?, receipt_date = ?,
+                       verified_total_cents = ?, reconciliation_status = ?
+                   WHERE id = ? AND house_id = ?""",
+                (
+                    analysis.get("merchant_name") or analysis.get("store_name"),
+                    analysis.get("receipt_date"), self._amount_to_cents(analysis.get("verified_total")),
+                    analysis.get("reconciliation_status"), receipt_id, house_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return False
+            item_rows = connection.execute(
+                "SELECT id FROM receipt_items WHERE receipt_id = ? ORDER BY item_order, id",
+                (receipt_id,),
+            ).fetchall()
+            for index, item in enumerate(analysis.get("items") or []):
+                if index < len(item_rows):
+                    connection.execute(
+                        "UPDATE receipt_items SET name = ?, line_total_cents = ?, line_type = ?, discount_group_id = ?, applies_to_item_ids = ? WHERE id = ?",
+                        (item.get("name"), self._amount_to_cents(item.get("line_total") or item.get("amount") or item.get("price")), item.get("type") or "item", item.get("discount_group_id"), ",".join(str(value) for value in (item.get("applies_to_item_ids") or [])) or None, int(item_rows[index]["id"])),
+                    )
+        return True
+
+    def get_receipt(self, house_id: int, receipt_id: int) -> dict[str, Any] | None:
+        with self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM receipts WHERE id = ? AND house_id = ?", (receipt_id, house_id)
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_settlements(self, house_id: int) -> list[dict[str, Any]]:
         with self.session() as connection:
             rows = connection.execute(
@@ -1171,9 +1353,16 @@ class Database:
                        COALESCE(settlement.title, settlement.content) AS title,
                        COALESCE(settlement.total_amount, settlement.amount) AS total_amount,
                        settlement.created_by, settlement.created_at, settlement.status,
-                       creator.display_name AS creator_name
+                       settlement.receipt_id, settlement.payer_id, settlement.uploaded_by,
+                       settlement.receipt_date, settlement.total_amount_cents,
+                       settlement.completed_at,
+                       creator.display_name AS creator_name,
+                       payer.display_name AS payer_name,
+                       uploader.display_name AS uploaded_by_name
                 FROM settlements settlement
                 LEFT JOIN users creator ON creator.id = settlement.created_by
+                LEFT JOIN users payer ON payer.id = settlement.payer_id
+                LEFT JOIN users uploader ON uploader.id = settlement.uploaded_by
                 WHERE settlement.house_id = ? AND COALESCE(settlement.is_deleted, 0) = 0
                 ORDER BY settlement.created_at DESC, settlement.id DESC
                 """,
@@ -1184,8 +1373,10 @@ class Database:
                 settlement = dict(row)
                 participants = connection.execute(
                     """
-                    SELECT participant.user_id, user.display_name AS name,
-                           participant.amount, participant.payment_status
+                    SELECT participant.id, participant.user_id, user.display_name AS name,
+                           participant.amount, participant.payment_status,
+                           COALESCE(participant.share_amount_cents, CAST(ROUND(participant.amount * 100) AS INTEGER)) AS share_amount_cents,
+                           participant.role, participant.paid_at, participant.confirmed_by
                     FROM settlement_participants participant
                     JOIN settlements settlement ON settlement.id = participant.settlement_id
                     JOIN house_members member
@@ -1207,12 +1398,19 @@ class Database:
         title: str,
         total_amount: float,
         participant_user_ids: list[int],
+        participant_amount_cents: dict[int, int] | None,
+        payer_user_id: int | None,
         created_by: int,
         creator_name: str,
+        receipt_id: int | None = None,
+        uploaded_by: int | None = None,
+        receipt_date: str | None = None,
+        total_amount_cents: int | None = None,
     ) -> dict[str, Any]:
         unique_participants = list(dict.fromkeys(participant_user_ids))
         with self.session() as connection:
-            placeholders = ",".join("?" for _ in unique_participants)
+            validated_ids = list(dict.fromkeys([*unique_participants, *([payer_user_id] if payer_user_id else [])]))
+            placeholders = ",".join("?" for _ in validated_ids)
             members = connection.execute(
                 f"""
                 SELECT member.user_id, user.display_name
@@ -1221,9 +1419,9 @@ class Database:
                 WHERE member.house_id = ? AND member.user_id IN ({placeholders})
                   AND user.is_deleted = 0
                 """,
-                (house_id, *unique_participants),
+                (house_id, *validated_ids),
             ).fetchall()
-            if len(members) != len(unique_participants):
+            if len(members) != len(validated_ids):
                 raise InvalidSettlementParticipantsError()
             names = {int(member["user_id"]): str(member["display_name"]) for member in members}
             now = self._now()
@@ -1232,8 +1430,9 @@ class Database:
                 """
                 INSERT INTO settlements (
                     house_id, content, debtor, creditor, amount, status,
-                    title, total_amount, created_by, created_at, is_deleted
-                ) VALUES (?, ?, ?, ?, ?, '진행 중', ?, ?, ?, ?, 0)
+                    title, total_amount, created_by, created_at, is_deleted,
+                    receipt_id, payer_id, uploaded_by, receipt_date, total_amount_cents
+                ) VALUES (?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     house_id,
@@ -1245,31 +1444,100 @@ class Database:
                     total_amount,
                     created_by,
                     now,
+                    receipt_id,
+                    payer_user_id,
+                    uploaded_by,
+                    receipt_date,
+                    total_amount_cents,
                 ),
             )
             settlement_id = int(cursor.lastrowid)
-            base_amount = round(total_amount / len(unique_participants), 2)
-            allocated = 0.0
-            for index, user_id in enumerate(unique_participants):
-                amount = (
-                    round(total_amount - allocated, 2)
-                    if index == len(unique_participants) - 1
-                    else base_amount
-                )
-                allocated = round(allocated + amount, 2)
+            total_cents = total_amount_cents or self._amount_to_cents(total_amount) or 0
+            if participant_amount_cents is not None:
+                allocation_cents = participant_amount_cents
+                if sum(allocation_cents.values()) != total_cents:
+                    raise InvalidSettlementParticipantsError()
+            else:
+                base_cents, remainder = divmod(total_cents, len(unique_participants))
+                allocation_cents = {
+                    user_id: base_cents + (1 if index < remainder else 0)
+                    for index, user_id in enumerate(unique_participants)
+                }
+            for user_id in unique_participants:
+                amount = allocation_cents[user_id] / 100
+                is_payer = user_id == payer_user_id
+                payment_status = "payer" if is_payer else "unpaid"
                 connection.execute(
                     """
                     INSERT INTO settlement_participants
-                        (settlement_id, user_id, amount, payment_status)
-                    VALUES (?, ?, ?, '미납')
+                        (settlement_id, user_id, amount, payment_status, share_amount_cents, role)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (settlement_id, user_id, amount),
+                    (settlement_id, user_id, amount, payment_status, allocation_cents[user_id], "payer" if is_payer else "participant"),
+                )
+            unpaid_count = sum(1 for user_id in unique_participants if user_id != payer_user_id)
+            if payer_user_id is not None and unpaid_count == 0:
+                connection.execute(
+                    "UPDATE settlements SET status = 'completed', completed_at = ? WHERE id = ?",
+                    (now, settlement_id),
                 )
         return next(
             settlement
             for settlement in self.list_settlements(house_id)
             if int(settlement["id"]) == settlement_id
         )
+
+    def update_settlement_payment_status(
+        self, house_id: int, settlement_id: int, participant_user_id: int,
+        payment_status: str, requester_user_id: int,
+    ) -> dict[str, Any]:
+        with self.session() as connection:
+            settlement = connection.execute(
+                """SELECT id, payer_id, is_deleted FROM settlements
+                   WHERE id = ? AND house_id = ?""",
+                (settlement_id, house_id),
+            ).fetchone()
+            if settlement is None or int(settlement["is_deleted"] or 0) == 1:
+                raise SettlementNotFoundError()
+            payer_id = int(settlement["payer_id"]) if settlement["payer_id"] is not None else None
+            if payer_id is None or requester_user_id != payer_id:
+                raise SettlementPaymentForbiddenError()
+            if participant_user_id == payer_id:
+                raise PayerPaymentStatusError()
+            participant = connection.execute(
+                """SELECT id FROM settlement_participants
+                   WHERE settlement_id = ? AND user_id = ?""",
+                (settlement_id, participant_user_id),
+            ).fetchone()
+            if participant is None:
+                raise SettlementParticipantNotFoundError()
+            paid_at = self._now() if payment_status == "paid" else None
+            confirmed_by = requester_user_id if payment_status == "paid" else None
+            connection.execute(
+                """UPDATE settlement_participants
+                   SET payment_status = ?, paid_at = ?, confirmed_by = ?, role = 'participant'
+                   WHERE settlement_id = ? AND user_id = ?""",
+                (payment_status, paid_at, confirmed_by, settlement_id, participant_user_id),
+            )
+            remaining = int(connection.execute(
+                """SELECT COUNT(*) FROM settlement_participants
+                   WHERE settlement_id = ? AND user_id != ? AND payment_status != 'paid'""",
+                (settlement_id, payer_id),
+            ).fetchone()[0])
+            settlement_status = "completed" if remaining == 0 else "in_progress"
+            completed_at = self._now() if settlement_status == "completed" else None
+            connection.execute(
+                "UPDATE settlements SET status = ?, completed_at = ? WHERE id = ?",
+                (settlement_status, completed_at, settlement_id),
+            )
+        return {
+            "settlement_id": settlement_id,
+            "participant_user_id": participant_user_id,
+            "payment_status": payment_status,
+            "settlement_status": settlement_status,
+            "paid_at": paid_at,
+            "completed_at": completed_at,
+        }
 
     def soft_delete_settlement(
         self, house_id: int, settlement_id: int, user_id: int

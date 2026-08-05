@@ -5,19 +5,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/app-button';
 import { AppTextField } from '@/components/app-text-field';
+import { BrandHeader } from '@/components/brand-header';
 import { InlineError } from '@/components/inline-error';
 import { PasswordField } from '@/components/password-field';
 import { Layout, Spacing, Typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useRoomTheme } from '@/hooks/use-room-theme';
-import { apiRequest } from '@/services/api';
+import { ApiError, apiRequest } from '@/services/api';
 import type { AuthResponse } from '@/types/api';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginScreen() {
   const colors = useRoomTheme();
-  const { saveAuth } = useAuth();
+  const { clearLogoutNotice, logoutNotice, saveAuth } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [emailTouched, setEmailTouched] = useState(false);
@@ -32,6 +33,8 @@ export default function LoginScreen() {
   const canSubmit = EMAIL_PATTERN.test(normalizedEmail) && password.length > 0 && !loading;
 
   const login = async () => {
+    if (loading) return;
+    clearLogoutNotice();
     setEmailTouched(true);
     setPasswordTouched(true);
     if (!canSubmit) return;
@@ -42,7 +45,21 @@ export default function LoginScreen() {
       const auth = await apiRequest<AuthResponse>('/auth/login', { method: 'POST', body: { email: normalizedEmail, password } });
       await saveAuth(auth);
     } catch (error) {
-      setRequestError(error instanceof Error ? error.message : '로그인하지 못했습니다. 입력 정보를 확인해주세요.');
+      if (!(error instanceof ApiError)) {
+        setRequestError('로그인하지 못했습니다. 입력 정보를 확인해주세요.');
+      } else if (error.status === 401) {
+        setRequestError(error.message);
+      } else if (error.status === 422) {
+        setRequestError('입력값 형식이 올바르지 않습니다. 입력 내용을 확인해주세요.');
+      } else if (error.status === 500) {
+        setRequestError('서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      } else if (error.kind === 'timeout') {
+        setRequestError('요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.');
+      } else if (error.kind === 'network') {
+        setRequestError(error.message);
+      } else {
+        setRequestError(error.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -52,10 +69,7 @@ export default function LoginScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.surface }]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         <ScrollView contentContainerStyle={styles.content} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <View style={styles.brandRow}>
-            <View style={[styles.brandMark, { backgroundColor: colors.primary }]}><Text style={styles.brandInitial}>R</Text></View>
-            <Text style={[styles.brandName, { color: colors.textPrimary }]}>RoomSync</Text>
-          </View>
+          <BrandHeader />
 
           <View style={styles.heading}>
             <Text style={[Typography.screenTitle, { color: colors.textPrimary }]}>만나서 반가워요</Text>
@@ -92,6 +106,7 @@ export default function LoginScreen() {
               <Text style={[styles.link, { color: colors.primary }]}>비밀번호를 잊으셨나요?</Text>
             </Pressable>
             {notice ? <InlineError message={notice} /> : null}
+            {logoutNotice ? <InlineError message={logoutNotice} /> : null}
             <AppButton disabled={!canSubmit} label="로그인" loading={loading} onPress={login} />
           </View>
 
@@ -105,10 +120,6 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 }, flex: { flex: 1 },
   content: { flexGrow: 1, paddingBottom: 32, paddingHorizontal: Layout.screenPadding, paddingTop: 30 },
-  brandRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
-  brandMark: { alignItems: 'center', borderRadius: 9, height: 34, justifyContent: 'center', width: 34 },
-  brandInitial: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
-  brandName: { fontSize: 20, fontWeight: '800', letterSpacing: -0.3 },
   heading: { gap: Spacing.compact, marginBottom: 36, marginTop: 56 },
   description: { fontSize: 16, lineHeight: 23 },
   form: { gap: Spacing.item },

@@ -6,12 +6,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/app-button';
 import { AppTextField } from '@/components/app-text-field';
+import { BrandHeader } from '@/components/brand-header';
 import { InlineError } from '@/components/inline-error';
 import { PasswordField } from '@/components/password-field';
 import { Layout, Spacing, Typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useRoomTheme } from '@/hooks/use-room-theme';
-import { apiRequest } from '@/services/api';
+import { ApiError, apiRequest } from '@/services/api';
 import type { AuthResponse } from '@/types/api';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -36,6 +37,7 @@ export default function SignupScreen() {
   const touch = (key: keyof typeof touched) => setTouched((current) => ({ ...current, [key]: true }));
 
   const signup = async () => {
+    if (loading) return;
     setTouched({ name: true, email: true, password: true, confirmation: true });
     if (!canSubmit) return;
     setLoading(true);
@@ -44,7 +46,25 @@ export default function SignupScreen() {
       const auth = await apiRequest<AuthResponse>('/auth/signup', { method: 'POST', body: { display_name: displayName.trim(), email: normalizedEmail, password } });
       await saveAuth(auth);
     } catch (error) {
-      setRequestError(error instanceof Error ? error.message : '회원가입하지 못했습니다.');
+      if (!(error instanceof ApiError)) {
+        setRequestError('회원가입하지 못했습니다.');
+      } else if (error.status === 409) {
+        const detail =
+          error.payload && typeof error.payload === 'object' && 'detail' in error.payload
+            ? error.payload.detail
+            : null;
+        setRequestError(typeof detail === 'string' ? detail : error.message);
+      } else if (error.status === 422) {
+        setRequestError('입력값 형식이 올바르지 않습니다. 입력 내용을 확인해주세요.');
+      } else if (error.status === 500) {
+        setRequestError('서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      } else if (error.kind === 'timeout') {
+        setRequestError('요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.');
+      } else if (error.kind === 'network') {
+        setRequestError('네트워크 오류가 발생했습니다. 인터넷 연결과 서버 주소를 확인해주세요.');
+      } else {
+        setRequestError(error.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -54,7 +74,7 @@ export default function SignupScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.surface }]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         <ScrollView contentContainerStyle={styles.content} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <Text style={[styles.brand, { color: colors.primary }]}>RoomSync</Text>
+          <BrandHeader />
           <View style={styles.heading}>
             <Text style={[Typography.screenTitle, { color: colors.textPrimary }]}>함께할 준비를 해볼까요?</Text>
             <Text style={[styles.description, { color: colors.textSecondary }]}>기본 정보를 입력하면 바로 하우스를 선택할 수 있어요.</Text>
@@ -86,7 +106,6 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 }, flex: { flex: 1 },
   content: { paddingBottom: 36, paddingHorizontal: Layout.screenPadding, paddingTop: 24 },
-  brand: { fontSize: 19, fontWeight: '800' },
   heading: { gap: Spacing.compact, marginBottom: 32, marginTop: 34 },
   description: { fontSize: 15, lineHeight: 22 },
   section: { gap: Spacing.item, marginBottom: Spacing.section },

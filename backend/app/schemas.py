@@ -1,5 +1,7 @@
 import re
 from datetime import date
+from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -112,26 +114,73 @@ class HealthResponse(BaseModel):
 
 
 class ReceiptItemResponse(BaseModel):
-    name: str
-    quantity: float = Field(default=1, gt=0)
-    price: float
+    receipt_item_id: int | None = None
+    name: str | None = None
+    quantity: float | None = Field(default=None, gt=0)
+    price: float | None = None
     unit_price: float | None = None
-    amount: float
+    line_total: float | None = None
+    amount: float | None = None
+    tax_marker: str | None = None
+    gst_status: Literal["taxable", "gst_free", "unknown"] = "unknown"
+    model_reported_confidence: float | None = Field(default=None, ge=0, le=1)
+    type: Literal["item", "discount", "coupon", "refund", "fee", "tax", "unknown"] = "item"
+    applies_to_item_ids: list[int] | None = None
+    discount_group_id: str | None = None
 
 
 class ReceiptAnalysisResponse(BaseModel):
+    receipt_id: int | None = None
+    uploaded_by: int | None = None
     store_name: str
     merchant_name: str | None = None
     receipt_date: str | None = None
     currency: str | None = None
     items: list[ReceiptItemResponse]
+    items_total: float | None = None
+    calculated_items_total: float | None = None
     subtotal: float | None = None
     tax: float | None = None
-    total: float
-    confidence: float | None = Field(default=None, ge=0, le=1)
+    gst: float | None = None
+    discount: float | None = None
+    fees: float | None = None
+    rounding: float | None = None
+    total: float | None = None
+    amount_paid: float | None = None
+    gst_inclusion_type: Literal["included", "excluded_then_added", "not_displayed", "mixed", "unknown"] = "unknown"
+    gst_displayed: bool = False
+    verified_total: float | None = None
+    reconciliation_status: Literal["verified", "verified_gst_included", "verified_gst_added", "mismatch", "needs_review"]
+    requires_review: bool
+    model_reported_confidence: float | None = Field(default=None, ge=0, le=1)
+    validation_score: int = Field(ge=0, le=100)
+    validation_status: Literal["verified", "mostly_verified", "needs_review", "invalid"]
+    validation_reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     analysis_mode: str
     warning: str | None = None
+
+
+class ReceiptReconciliationRequest(BaseModel):
+    receipt_id: int | None = None
+    uploaded_by: int | None = None
+    store_name: str = "Unknown Store"
+    merchant_name: str | None = None
+    receipt_date: str | None = None
+    currency: str | None = None
+    items: list[ReceiptItemResponse] = Field(default_factory=list)
+    items_total: float | None = None
+    subtotal: float | None = None
+    gst: float | None = None
+    discount: float | None = None
+    fees: float | None = None
+    rounding: float | None = None
+    total: float | None = None
+    amount_paid: float | None = None
+    gst_inclusion_type: Literal["included", "excluded_then_added", "not_displayed", "mixed", "unknown"] = "unknown"
+    gst_displayed: bool = False
+    model_reported_confidence: float | None = Field(default=None, ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ChoreAssigneeResponse(BaseModel):
@@ -212,27 +261,51 @@ class ShoppingItemsBulkDeleteResponse(BaseModel):
     deleted_count: int
 
 
+class ReceiptSettlementItem(BaseModel):
+    receipt_item_id: int | None = None
+    name: str | None = None
+    line_total: Decimal
+    amount_cents: int | None = None
+    participant_user_ids: list[int] = Field(default_factory=list)
+    type: Literal["item", "discount", "coupon", "refund", "fee", "tax", "unknown"] = "item"
+    applies_to_item_ids: list[int] | None = None
+    discount_group_id: str | None = None
+
+
 class SettlementCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     total_amount: float = Field(gt=0)
     participant_user_ids: list[int] = Field(min_length=1)
+    receipt_verified_total: float | None = Field(default=None, gt=0)
+    receipt_reconciliation_status: Literal["verified", "verified_gst_included", "verified_gst_added", "mismatch", "needs_review"] | None = None
+    receipt_items: list[ReceiptSettlementItem] | None = None
+    receipt_id: int | None = Field(default=None, gt=0)
+    payer_id: int | None = Field(default=None, gt=0)
+    uploaded_by: int | None = Field(default=None, gt=0)
+    receipt_date: date | None = None
+    total_amount_cents: int | None = Field(default=None, gt=0)
+    items: list[ReceiptSettlementItem] | None = None
 
     @field_validator("title")
     @classmethod
     def normalize_settlement_title(cls, value: str) -> str:
         return value.strip()
-
-
 class SettlementCreatorResponse(BaseModel):
     user_id: int
     name: str
 
 
 class SettlementParticipantResponse(BaseModel):
+    id: int | None = None
     user_id: int
     name: str
     amount: float
-    payment_status: str
+    display_name: str
+    share_amount_cents: int
+    role: Literal["payer", "participant"]
+    payment_status: Literal["payer", "unpaid", "paid"]
+    paid_at: str | None = None
+    confirmed_by: int | None = None
 
 
 class SettlementResponse(BaseModel):
@@ -240,9 +313,17 @@ class SettlementResponse(BaseModel):
     house_id: int
     title: str
     total_amount: float
+    total_amount_cents: int
+    receipt_id: int | None = None
+    payer_id: int | None = None
+    payer_name: str | None = None
+    uploaded_by: int | None = None
+    uploaded_by_name: str | None = None
+    receipt_date: date | None = None
     created_by: SettlementCreatorResponse | None
     created_at: str
-    status: str
+    completed_at: str | None = None
+    status: Literal["in_progress", "completed"]
     is_completed: bool
     participants: list[SettlementParticipantResponse]
 
@@ -251,3 +332,16 @@ class SettlementDeleteResponse(BaseModel):
     deleted_settlement_id: int
     deleted_at: str
     deleted_by: int
+
+
+class SettlementPaymentStatusRequest(BaseModel):
+    payment_status: Literal["paid", "unpaid"]
+
+
+class SettlementPaymentStatusResponse(BaseModel):
+    settlement_id: int
+    participant_user_id: int
+    payment_status: Literal["paid", "unpaid"]
+    settlement_status: Literal["in_progress", "completed"]
+    paid_at: str | None = None
+    completed_at: str | None = None
