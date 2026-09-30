@@ -4,6 +4,26 @@
 
 RoomSync는 쉐어하우스에서 반복되는 영수증 정산, 청소 일정, 공동 장보기 관리를 하나의 모바일 앱으로 통합한 프로젝트입니다. 영수증 이미지를 Gemini Vision으로 분석하고, 사용자가 품목과 금액을 검증한 뒤 참여자별 분담금을 센트 단위로 계산합니다.
 
+## 📱 앱 주요 화면
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061.jpg" width="220" alt="RoomSync App Screen 1">
+  <img src="docs/KakaoTalk_20260930_173521061_01.jpg" width="220" alt="RoomSync App Screen 2">
+  <img src="docs/KakaoTalk_20260930_173521061_02.jpg" width="220" alt="RoomSync App Screen 3">
+</p>
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061_03.jpg" width="220" alt="RoomSync App Screen 4">
+  <img src="docs/KakaoTalk_20260930_173521061_04.jpg" width="220" alt="RoomSync App Screen 5">
+  <img src="docs/KakaoTalk_20260930_173521061_05.jpg" width="220" alt="RoomSync App Screen 6">
+</p>
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061_06.jpg" width="220" alt="RoomSync App Screen 7">
+  <img src="docs/KakaoTalk_20260930_173521061_07.jpg" width="220" alt="RoomSync App Screen 8">
+  <img src="docs/KakaoTalk_20260930_173521061_08.jpg" width="220" alt="RoomSync App Screen 9">
+</p>
+
 ## 핵심 기능
 
 - 회원가입, 로그인 및 하우스별 권한 관리
