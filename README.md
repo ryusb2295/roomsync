@@ -6,22 +6,39 @@ RoomSync는 쉐어하우스에서 반복되는 영수증 정산, 청소 일정, 
 
 ## 📱 앱 주요 화면
 
+### 1. 로그인 및 하우스 참여
+
 <p align="center">
-  <img src="docs/KakaoTalk_20260930_173521061.jpg" width="220" alt="RoomSync App Screen 1">
-  <img src="docs/KakaoTalk_20260930_173521061_01.jpg" width="220" alt="RoomSync App Screen 2">
-  <img src="docs/KakaoTalk_20260930_173521061_02.jpg" width="220" alt="RoomSync App Screen 3">
+  <img src="docs/KakaoTalk_20260930_173521061_02.jpg" width="220" alt="로그인">
+  <img src="docs/KakaoTalk_20260930_173521061_03.jpg" width="220" alt="회원가입">
+  <img src="docs/KakaoTalk_20260930_173521061_04.jpg" width="220" alt="하우스 선택">
+</p>
+
+### 2. 영수증 기반 정산
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061_05.jpg" width="220" alt="정산 메인">
+  <img src="docs/KakaoTalk_20260930_173521061_06.jpg" width="220" alt="영수증 업로드">
+  <img src="docs/KakaoTalk_20260930_173521061_07.jpg" width="220" alt="AI 영수증 분석">
+</p>
+
+### 3. 정산 및 하우스 관리
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061_01.jpg" width="220" alt="정산 내역">
+  <img src="docs/KakaoTalk_20260930_173521061_08.jpg" width="220" alt="하우스 관리">
+</p>
+
+### 4. AI 영수증 분석 예시
+
+<p align="center">
+  <img src="docs/KakaoTalk_20260930_173521061.jpg" width="240" alt="실제 영수증">
+  <img src="docs/KakaoTalk_20260930_173521061_07.jpg" width="220" alt="영수증 분석 결과">
 </p>
 
 <p align="center">
-  <img src="docs/KakaoTalk_20260930_173521061_03.jpg" width="220" alt="RoomSync App Screen 4">
-  <img src="docs/KakaoTalk_20260930_173521061_04.jpg" width="220" alt="RoomSync App Screen 5">
-  <img src="docs/KakaoTalk_20260930_173521061_05.jpg" width="220" alt="RoomSync App Screen 6">
-</p>
-
-<p align="center">
-  <img src="docs/KakaoTalk_20260930_173521061_06.jpg" width="220" alt="RoomSync App Screen 7">
-  <img src="docs/KakaoTalk_20260930_173521061_07.jpg" width="220" alt="RoomSync App Screen 8">
-  <img src="docs/KakaoTalk_20260930_173521061_08.jpg" width="220" alt="RoomSync App Screen 9">
+  실제 영수증 이미지를 Gemini Vision으로 분석하여 품목과 금액을 구조화하고,
+  사용자가 결과를 검증한 뒤 정산에 활용합니다.
 </p>
 
 ## 핵심 기능
