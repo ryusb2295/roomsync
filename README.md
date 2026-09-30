@@ -9,7 +9,6 @@ RoomSync는 쉐어하우스에서 반복되는 영수증 정산, 청소 일정, 
 ### 1. 로그인 및 하우스 참여
 
 <p align="center">
-  <img src="docs/KakaoTalk_20260930_173521061_02.jpg" width="220" alt="로그인">
   <img src="docs/KakaoTalk_20260930_173521061_03.jpg" width="220" alt="회원가입">
   <img src="docs/KakaoTalk_20260930_173521061_04.jpg" width="220" alt="하우스 선택">
 </p>
